@@ -181,6 +181,7 @@ in {
                 ++ final.lib.optionals final.hostPlatform.isDarwin
                   (fromUntil "8.10.5" "8.10.6" ./patches/ghc/ghc-8.10.5-darwin-allocateExec.patch)
                 ++ until              "8.10.6" ./patches/ghc/Sphinx_Unicode_Error.patch
+                ++ fromUntil "8.10"   "8.10.8" ./patches/ghc/ghc-8.10-nonmoving.patch
                 ;
         in ({
             ghc844 = final.callPackage ../compiler/ghc {
