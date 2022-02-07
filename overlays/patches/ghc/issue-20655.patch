@@ -1,0 +1,34 @@
+commit 05698654a8e0c0afe4093873a50f51c870aea039
+Author: Sebastian Graf <sebastian.graf@kit.edu>
+Date:   Tue Sep 29 18:19:53 2020 +0200
+
+    Pmc: Don't call exprType on type arguments (#18767)
+    
+    Fixes #18767.
+    
+    (cherry picked from commit 7810d1307498e0ee2bf8f28e18220203cd775b2a)
+    
+    Addresses #20655.
+
+diff --git a/compiler/GHC/HsToCore/PmCheck/Types.hs b/compiler/GHC/HsToCore/PmCheck/Types.hs
+index 06678b4060..4addeaff1d 100644
+--- a/compiler/GHC/HsToCore/PmCheck/Types.hs
++++ b/compiler/GHC/HsToCore/PmCheck/Types.hs
+@@ -58,7 +58,7 @@ import CoreUtils (exprType)
+ import PrelNames
+ import TysWiredIn
+ import TysPrim
+-import TcType (evVarPred)
++import TcType (evVarPred, isStringTy)
+ 
+ import Numeric (fromRat)
+ import Data.Foldable (find)
+@@ -309,7 +309,7 @@ coreExprAsPmLit e = case collectArgs e of
+   (Var x, args)
+     | is_rebound_name x fromStringName
+     -- With -XRebindableSyntax or without: The first String argument is what we are after
+-    , s:_ <- filter (eqType stringTy . exprType) args
++    , s:_ <- filter (isStringTy . exprType) $ filter isValArg args
+     -- NB: Calls coreExprAsPmLit and then overloadPmLit, so that we return PmLitOverStrings
+     -> coreExprAsPmLit s >>= overloadPmLit (exprType e)
+   -- These last two cases handle String literals
