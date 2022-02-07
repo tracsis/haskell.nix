@@ -44,6 +44,9 @@ let self =
 , # Whether to build terminfo.  Musl fails to build terminfo as ncurses seems to be linked to glibc
   enableTerminfo ? !stdenv.targetPlatform.isWindows && !stdenv.targetPlatform.isMusl
 
+, # Wheter to build in NUMA support
+  enableNUMA ? true
+
 , # What flavour to build. An empty string indicates no
   # specific flavour and falls back to ghc default values.
   ghcFlavour ? lib.optionalString haskell-nix.haskellLib.isCrossTarget (
@@ -85,6 +88,8 @@ let
 
   targetGmp = targetPackages.gmp or gmp;
 
+  targetIconv = targetPackages.libiconv or libiconv;
+
   # TODO(@Ericson2314) Make unconditional
   targetPrefix = lib.optionalString
     (targetPlatform != hostPlatform)
@@ -97,6 +102,7 @@ let
     endif
     DYNAMIC_GHC_PROGRAMS = ${if enableShared then "YES" else "NO"}
     INTEGER_LIBRARY = ${if enableIntegerSimple then "integer-simple" else "integer-gmp"}
+    EXTRA_HADDOCK_OPTS += --quickjump --hyperlinked-source
   '' + lib.optionalString (targetPlatform != hostPlatform) ''
     CrossCompilePrefix = ${targetPrefix}
   '' + lib.optionalString isCrossTarget ''
@@ -120,24 +126,27 @@ let
   ''
   # musl doesn't have a system-linker. Only on x86, and on x86 we need it, as
   # our elf linker for x86_64 is broken.
-  + lib.optionalString (targetPlatform.isMusl && !targetPlatform.isx86) ''
+  + lib.optionalString (targetPlatform.isAndroid || (targetPlatform.isMusl && !targetPlatform.isx86)) ''
     compiler_CONFIGURE_OPTS += --flags=-dynamic-system-linker
   ''
   # While split sections are now enabled by default in ghc 8.8 for windows,
   # the seem to lead to `too many sections` errors when building base for
   # profiling.
-  + lib.optionalString targetPlatform.isWindows ''
+  #
+  # It appears that loading split sections through iserv on qemu-aarch64, is
+  # particularly slow. Let's disable them for now.
+  + lib.optionalString (targetPlatform.isWindows || targetPlatform.isAndroid) ''
     SplitSections = NO
   '' + lib.optionalString (!enableLibraryProfiling) ''
     BUILD_PROF_LIBS = NO
   '';
 
   # Splicer will pull out correct variations
-  libDeps = platform: lib.optional enableTerminfo [ ncurses ]
+  libDeps = platform: lib.optional enableTerminfo [ ncurses ncurses.dev ]
     ++ [targetLibffi]
     ++ lib.optional (!enableIntegerSimple) gmp
     ++ lib.optional (platform.libc != "glibc" && !targetPlatform.isWindows) libiconv
-    ++ lib.optional (platform.isLinux && !platform.isAarch32) numactl;
+    ++ lib.optional (enableNUMA && platform.isLinux && !platform.isAarch32 && !platform.isAndroid) numactl;
 
   toolsForTarget =
     if hostPlatform == buildPlatform then
@@ -160,7 +169,7 @@ let
     targetCC
     enableIntegerSimple targetGmp
     enableDWARF elfutils
-    ncurses targetLibffi libiconv
+    ncurses targetLibffi libiconv targetIconv
     disableLargeAddressSpace
     buildMK
     ;
@@ -195,18 +204,21 @@ stdenv.mkDerivation (rec {
 
      # these two are required
      substituteInPlace mk/config.mk  --replace "$TOP" "$PWD" \
-                                     --replace "$PREFIX" "$out"
+                                     --replace "$PREFIX" "$out" \
+                                     --replace "${configured-src.doc}" "$doc"
 
      substituteInPlace mk/install.mk --replace "$TOP" "$PWD" \
-                                     --replace "$PREFIX" "$out"
+                                     --replace "$PREFIX" "$out" \
+                                     --replace "${configured-src.doc}" "$doc"
 
      # these two only for convencience.
-     substituteInPlace config.log    --replace "$TOP" "$PWD"\
-                                     --replace "$PREFIX" "$out"
-     substituteInPlace config.status --replace "$TOP" "$PWD"\
-                                     --replace "$PREFIX" "$out")
+     substituteInPlace config.log    --replace "$TOP" "$PWD" \
+                                     --replace "$PREFIX" "$out" \
+                                     --replace "${configured-src.doc}" "$doc"
 
-
+     substituteInPlace config.status --replace "$TOP" "$PWD" \
+                                     --replace "$PREFIX" "$out" \
+                                     --replace "${configured-src.doc}" "$doc")
   '';
 
   enableParallelBuilding = true;
@@ -229,9 +241,6 @@ stdenv.mkDerivation (rec {
   depsBuildTarget = toolsForTarget;
 
   buildInputs = [ perl bash ] ++ (libDeps hostPlatform);
-
-  propagatedBuildInputs = [ targetPackages.stdenv.cc ]
-    ++ lib.optional useLLVM llvmPackages.llvm;
 
   depsTargetTarget = map lib.getDev (libDeps targetPlatform);
   depsTargetTargetPropagated = map (lib.getOutput "out") (libDeps targetPlatform);
@@ -268,9 +277,7 @@ stdenv.mkDerivation (rec {
 
     # Save generated files for needed when building ghcjs
     mkdir -p $generated/includes/dist-derivedconstants/header
-    cp includes/dist-derivedconstants/header/GHCConstantsHaskellExports.hs \
-       includes/dist-derivedconstants/header/GHCConstantsHaskellType.hs \
-       includes/dist-derivedconstants/header/GHCConstantsHaskellWrappers.hs \
+    cp includes/dist-derivedconstants/header/GHCConstantsHaskell*.hs \
        $generated/includes/dist-derivedconstants/header
     if [[ -f includes/ghcplatform.h ]]; then
       cp includes/ghcplatform.h $generated/includes
@@ -332,6 +339,11 @@ stdenv.mkDerivation (rec {
       enableDWARF = stdenv.targetPlatform.isLinux
         && builtins.compareVersions ghc-version "8.10.2" >= 0;
     });
+
+    # The same GHC, but without the large (1TB) address space reservation
+    smallAddressSpace = lib.makeOverridable self (args // {
+      disableLargeAddressSpace = true;
+    });
   } // extra-passthru;
 
   meta = {
@@ -350,7 +362,7 @@ stdenv.mkDerivation (rec {
   dontStrip = true;
   dontPatchELF = true;
   noAuditTmpdir = true;
-} // lib.optionalAttrs (__elem ghc-version ["8.10.5" "8.10.6" "8.10.7"] && stdenv.buildPlatform.isDarwin) {
+} // lib.optionalAttrs stdenv.buildPlatform.isDarwin {
   # ghc install on macOS wants to run `xattr -r -c`
   # The macOS version fails because it wants python 2.
   # The nix version of xattr does not support those args.

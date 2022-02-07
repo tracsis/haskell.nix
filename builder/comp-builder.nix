@@ -61,7 +61,7 @@ let self =
 
 # Profiling
 , enableLibraryProfiling ? component.enableLibraryProfiling
-, enableExecutableProfiling ? component.enableExecutableProfiling
+, enableProfiling ? component.enableProfiling
 , profilingDetail ? component.profilingDetail
 
 # Coverage
@@ -82,6 +82,7 @@ let self =
 
 # LLVM
 , useLLVM ? ghc.useLLVM
+, smallAddressSpace ? false
 
 }@drvArgs:
 
@@ -98,7 +99,8 @@ let
     && !stdenv.hostPlatform.isMusl
     && builtins.compareVersions defaults.ghc.version "8.10.2" >= 0;
 
-  ghc = if enableDWARF then defaults.ghc.dwarf else defaults.ghc;
+  ghc = if enableDWARF then defaults.ghc.dwarf else
+        if smallAddressSpace then defaults.ghc.smallAddressSpace else defaults.ghc;
   setup = if enableDWARF then drvArgs.setup.dwarf else drvArgs.setup;
 
   # TODO fix cabal wildcard support so hpack wildcards can be mapped to cabal wildcards
@@ -129,7 +131,7 @@ let
 
   fullName = "${nameOnly}-${package.identifier.version}";
 
-  needsProfiling = enableExecutableProfiling || enableLibraryProfiling;
+  needsProfiling = enableProfiling || enableLibraryProfiling;
 
   configFiles = makeConfigFiles {
     component = componentForSetup;
@@ -176,7 +178,7 @@ let
       [ "--with-gcc=${stdenv.cc.targetPrefix}cc"
       ] ++
       # BINTOOLS
-      (if stdenv.hostPlatform.isLinux
+      (if stdenv.hostPlatform.isLinux && !stdenv.hostPlatform.isAndroid # might be better check to see if cc is clang/llvm?
         # use gold as the linker on linux to improve link times
         then [
           "--with-ld=${stdenv.cc.bintools.targetPrefix}ld.gold"
@@ -193,7 +195,7 @@ let
       (disableFeature dontStrip "executable-stripping")
       (disableFeature dontStrip "library-stripping")
       (enableFeature enableLibraryProfiling "library-profiling")
-      (enableFeature enableExecutableProfiling "executable-profiling")
+      (enableFeature enableProfiling "profiling")
       (enableFeature enableStatic "static")
       (enableFeature enableShared "shared")
       (enableFeature doCoverage "coverage")
@@ -201,13 +203,13 @@ let
     ] ++ lib.optionals (stdenv.hostPlatform.isMusl && (haskellLib.isExecutableType componentId)) [
       # These flags will make sure the resulting executable is statically linked.
       # If it uses other libraries it may be necessary for to add more
-      # `--ghc-option=-optl=-L` options to the `configurationFlags` of the
+      # `--ghc-option=-optl=-L` options to the `configureFlags` of the
       # component.
       "--disable-executable-dynamic"
       "--ghc-option=-optl=-pthread"
       "--ghc-option=-optl=-static"
     ] ++ lib.optional enableSeparateDataOutput "--datadir=$data/share/${ghc.name}"
-      ++ lib.optional (enableLibraryProfiling || enableExecutableProfiling) "--profiling-detail=${profilingDetail}"
+      ++ lib.optional (enableLibraryProfiling || enableProfiling) "--profiling-detail=${profilingDetail}"
       ++ lib.optional stdenv.hostPlatform.isLinux (enableFeature enableDeadCodeElimination "split-sections")
       ++ lib.optionals haskellLib.isCrossHost (
         map (arg: "--hsc2hs-option=" + arg) (["--cross-compile"] ++ lib.optionals (stdenv.hostPlatform.isWindows) ["--via-asm"])
@@ -380,12 +382,18 @@ let
       runHook postConfigure
     '';
 
-    buildPhase = ''
+    buildPhase = if stdenv.hostPlatform.isGhcjs then ''
+      runHook preBuild
+      # https://gitlab.haskell.org/ghc/ghc/issues/9221
+      $SETUP_HS build ${haskellLib.componentTarget componentId} ${lib.concatStringsSep " " setupBuildFlags}
+      runHook postBuild
+    '' else ''
       runHook preBuild
       # https://gitlab.haskell.org/ghc/ghc/issues/9221
       $SETUP_HS build ${haskellLib.componentTarget componentId} -j$(($NIX_BUILD_CORES > 4 ? 4 : $NIX_BUILD_CORES)) ${lib.concatStringsSep " " setupBuildFlags}
       runHook postBuild
-    '';
+    ''
+    ;
 
     # Note: Cabal does *not* copy test executables during the `install` phase.
     #
@@ -457,7 +465,7 @@ let
         if [ -f ${testExecutable} ]; then
           mkdir -p $(dirname $out/bin/${exeName})
           ${if stdenv.hostPlatform.isGhcjs then ''
-            cat <(echo \#!${lib.getBin buildPackages.nodejs}/bin/node) ${testExecutable} >| $out/bin/${exeName}
+            cat <(echo \#!${lib.getBin buildPackages.nodejs-12_x}/bin/node) ${testExecutable} >| $out/bin/${exeName}
             chmod +x $out/bin/${exeName}
           '' else ''
              cp -r ${testExecutable} $(dirname $out/bin/${exeName})

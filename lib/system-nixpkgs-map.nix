@@ -84,6 +84,8 @@ with pkgs;
   vulkan = [ vulkan-loader ];
   sodium = [ libsodium ];
   gfortran = [ gfortran.cc.lib ];
+  ssh2 = [ libssh2 ];
+  gpiod = [ libgpiod ];
 }
 # -- windows
 // { advapi32 = null; gdi32 = null; imm32 = null; msimg32 = null;

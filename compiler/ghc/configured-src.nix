@@ -10,7 +10,7 @@
 , targetCC
 , enableIntegerSimple, targetGmp
 , enableDWARF, elfutils
-, ncurses, targetLibffi, libiconv
+, ncurses, targetLibffi, libiconv, targetIconv
 , disableLargeAddressSpace
 , buildMK
 }:
@@ -32,9 +32,6 @@ stdenv.mkDerivation (rec {
     depsBuildTarget = toolsForTarget;
 
     buildInputs = [ perl bash ] ++ (libDeps hostPlatform);
-
-    propagatedBuildInputs = [ targetPackages.stdenv.cc ]
-        ++ lib.optional useLLVM llvmPackages.llvm;
 
     depsTargetTarget = map lib.getDev (libDeps targetPlatform);
     depsTargetTargetPropagated = map (lib.getOutput "out") (libDeps targetPlatform);
@@ -65,6 +62,9 @@ stdenv.mkDerivation (rec {
 
         echo -n "${buildMK}" > mk/build.mk
         sed -i -e 's|-isysroot /Developer/SDKs/MacOSX10.5.sdk||' configure
+    '' + lib.optionalString useLLVM ''
+        export LLC="${llvmPackages.llvm}/bin/llc"
+        export OPT="${llvmPackages.llvm}/bin/opt"
     '' + lib.optionalString (!stdenv.isDarwin) ''
         export NIX_LDFLAGS+=" -rpath $out/lib/${targetPrefix}ghc-${version}"
     '' + lib.optionalString stdenv.isDarwin ''
@@ -105,6 +105,8 @@ stdenv.mkDerivation (rec {
         "--with-gmp-includes=${targetGmp.dev}/include" "--with-gmp-libraries=${targetGmp.out}/lib"
     ] ++ lib.optional (targetPlatform == hostPlatform && hostPlatform.libc != "glibc" && !targetPlatform.isWindows) [
         "--with-iconv-includes=${libiconv}/include" "--with-iconv-libraries=${libiconv}/lib"
+    ] ++ lib.optional (targetPlatform != hostPlatform) [
+        "--with-iconv-includes=${targetIconv}/include" "--with-iconv-libraries=${targetIconv}/lib"
     ] ++ lib.optionals (targetPlatform != hostPlatform) [
         "--enable-bootstrap-with-devel-snapshot"
     ] ++ lib.optionals (disableLargeAddressSpace) [
@@ -119,9 +121,12 @@ stdenv.mkDerivation (rec {
         "--with-libdw-libraries=${lib.getLib elfutils}/lib"
     ];
 
-    outputs = [ "out" ];
+    outputs = [ "out" "doc" ];
     phases = [ "unpackPhase" "patchPhase" ]
             ++ lib.optional (ghc-patches != []) "autoreconfPhase"
             ++ [ "configurePhase" "installPhase" ];
-    installPhase = "cp -r . $out";
+    installPhase = ''
+        cp -r . $out
+        mkdir $doc
+    '';
 })

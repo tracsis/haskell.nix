@@ -60,7 +60,8 @@ in
       "ghcjs-prim" "ghcjs-th"
     ]
     # TODO make this unconditional
-    ++ lib.optionals (config.compiler.nix-name == "ghc901") [
+    ++ lib.optionals (
+      __elem config.compiler.nix-name ["ghc901" "ghc902" "ghc921"]) [
       "ghc-bignum" ]
     ++ lib.optionals (!config.reinstallableLibGhc) [
       "ghc-boot"
@@ -81,7 +82,10 @@ in
       "rts" "ghc-boot-th"
       "ghc-heap" # since ghc 8.6.
       "ghcjs-prim"
-   ] ++ lib.optional (!config.reinstallableLibGhc) "ghc";
+   ] ++ lib.optional (!config.reinstallableLibGhc) "ghc"
+    ++ lib.optionals (
+      __elem config.compiler.nix-name ["ghc901" "ghc902" "ghc921"]) [
+      "ghc-bignum" ];
 
   options.hsPkgs = lib.mkOption {
     type = lib.types.unspecified;

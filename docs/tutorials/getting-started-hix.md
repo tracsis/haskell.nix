@@ -98,7 +98,7 @@ in the files or on the command line (they are all optional):
 
 ```nix
 { name = "hello";                    # for better error messages and derivation names
-  nixpkgsPin = "nixpkgs-unstable";   # or nixpkgs-2009 or nixpkgs-2003
+  nixpkgsPin = "nixpkgs-unstable";   # or nixpkgs-2111 or nixpkgs-2105
   nixpkgs = <nixpkgs>;               # use this instead of nixpkgsPin
   subDir = "some/sub/dir";           # sub dir containing the haskell project
   projectFileName = "stack.yaml";    # use this project file
@@ -118,7 +118,7 @@ If you have a `nix/hix.nix` file with suitable configuration that
 you want to make available to users with Nix (without having to
 install Hix).
 
-[Niv](https://github.com/nmattia/niv) is a command line tool for keeping tack of Nix project dependencies.
+[Niv](https://github.com/nmattia/niv) is a command line tool for keeping track of Nix project dependencies.
 
 After installing niv you can initialize niv and pin the latest haskell.nix
 commit by running the following in the root directory of the project:

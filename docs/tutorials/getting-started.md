@@ -37,7 +37,7 @@ This can be tricky to get setup properly. If you're still having trouble getting
 
 ## Niv
 
-[Niv](https://github.com/nmattia/niv) is a command line tool for keeping tack of Nix project dependencies.
+[Niv](https://github.com/nmattia/niv) is a command line tool for keeping track of Nix project dependencies.
 
 This guide assumes that the `sources.haskellNix` will be set to point
 a pinned copy of the haskell.nix github repo.  One easy way to do this
@@ -87,7 +87,7 @@ let
     # haskell.nix provides access to the nixpkgs pins which are used by our CI,
     # hence you will be more likely to get cache hits when using these.
     # But you can also just use your own, e.g. '<nixpkgs>'.
-    haskellNix.sources.nixpkgs-2009
+    haskellNix.sources.nixpkgs-unstable
     # These arguments passed to nixpkgs, include some patches and also
     # the haskell.nix functionality itself as an overlay.
     haskellNix.nixpkgsArgs;
