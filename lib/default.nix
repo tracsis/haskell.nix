@@ -202,7 +202,7 @@ in {
   cleanGit = import ./clean-git.nix {
     inherit lib cleanSourceWith;
     git = gitMinimal;
-    inherit (pkgs.evalPackages.buildPackages) runCommand;
+    inherit (pkgs.evalPackages.buildPackages) runCommandLocal;
   };
 
   # Some times it is handy to temporarily use a relative path between git
@@ -275,7 +275,7 @@ in {
 
   inherit (import ./cabal-project-parser.nix {
     inherit pkgs;
-  }) parseIndexState parseBlock;
+  }) parseIndexState parseSourceRepositoryPackages parseRepositories parseSourceRepositoryPackageBlock parseRepositoryBlock;
 
 
   cabalToNixpkgsLicense = import ./spdx/cabal.nix pkgs;
