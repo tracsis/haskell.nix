@@ -112,6 +112,11 @@ in runCommand "${componentName}-${ghc.name}-env" {
           --set "NIX_${ghcCommandCaps}_DOCDIR" "${docDir}"                  \
           --set "GHC_PLUGINS"                  "$GHC_PLUGINS"               \
           --set "NIX_${ghcCommandCaps}_LIBDIR" "${libDir}"
+  '' + lib.optionalString ((stdenv.targetPlatform.isLinux && !stdenv.targetPlatform.isAndroid) || stdenv.targetPlatform.isAarch32)
+  ''
+          --add-flags '"--fuse-ld=gold"'
+  ''
+  + ''
       fi
     done
 
