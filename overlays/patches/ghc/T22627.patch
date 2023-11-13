@@ -1,0 +1,128 @@
+From 05c9f986890979ff109b38a0270119dc985a6996 Mon Sep 17 00:00:00 2001
+From: Teo Camarasu <teofilcamarasu@gmail.com>
+Date: Wed, 3 May 2023 13:52:59 +0100
+Subject: [PATCH 1/2] rts: Ensure non-moving gc is not running when pausing
+
+---
+ rts/RtsAPI.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/rts/RtsAPI.c b/rts/RtsAPI.c
+index 8876894ab9..667e33a0b6 100644
+--- a/rts/RtsAPI.c
++++ b/rts/RtsAPI.c
+@@ -19,6 +19,7 @@
+ #include "StablePtr.h"
+ #include "Threads.h"
+ #include "Weak.h"
++#include "sm/NonMoving.h"
+ 
+ /* ----------------------------------------------------------------------------
+    Building Haskell objects from C datatypes.
+@@ -713,6 +714,16 @@ Capability *pauseTokenCapability(PauseToken *pauseToken) {
+ // See Note [Locking and Pausing the RTS]
+ PauseToken *rts_pause (void)
+ {
++
++    // Wait for any nonmoving collection to finish before pausing the RTS.
++    // The nonmoving collector needs to synchronise with the mutator,
++    // so pausing the mutator while a collection is ongoing might lead to deadlock or
++    // capabilities being prematurely re-awoken.
++    if (RtsFlags.GcFlags.useNonmoving) {
++      ACQUIRE_LOCK(&nonmoving_collection_mutex);
++    }
++
++
+     // It is an error if this thread already paused the RTS. If another
+     // thread has paused the RTS, then rts_pause will block until rts_resume is
+     // called (and compete with other threads calling rts_pause). The blocking
+@@ -775,6 +786,10 @@ void rts_resume (PauseToken *pauseToken)
+     releaseAllCapabilities(getNumCapabilities(), NULL, task);
+     exitMyTask();
+     stgFree(pauseToken);
++
++    if (RtsFlags.GcFlags.useNonmoving) {
++      RELEASE_LOCK(&nonmoving_collection_mutex);
++    }
+ }
+ 
+ // See RtsAPI.h
+-- 
+2.42.0
+
+
+From f027641e0ef565a1f5b96c293898b622f7bb8e58 Mon Sep 17 00:00:00 2001
+From: Teo Camarasu <teofilcamarasu@gmail.com>
+Date: Wed, 3 May 2023 16:19:29 +0100
+Subject: [PATCH 2/2] rts: Teach listAllBlocks about nonmoving heap
+
+List all blocks on the non-moving heap.
+
+Resolves #22627
+---
+ rts/sm/Storage.c | 31 +++++++++++++++++++++++++++++--
+ 1 file changed, 29 insertions(+), 2 deletions(-)
+
+diff --git a/rts/sm/Storage.c b/rts/sm/Storage.c
+index b786c3ab40..bc0ca57db2 100644
+--- a/rts/sm/Storage.c
++++ b/rts/sm/Storage.c
+@@ -42,7 +42,7 @@
+ #include "GC.h"
+ #include "Evac.h"
+ #include "NonMovingAllocate.h"
+-#include "sm/NonMovingMark.h"
++#include "NonMovingMark.h"
+ #if defined(ios_HOST_OS) || defined(darwin_HOST_OS)
+ #include "Hash.h"
+ #endif
+@@ -365,11 +365,20 @@ listGenBlocks (ListBlocksCb cb, void *user, generation* gen)
+     cb(user, gen->compact_blocks_in_import);
+ }
+ 
++static void
++listSegmentBlocks (ListBlocksCb cb, void *user, struct NonmovingSegment *seg)
++{
++  while (seg) {
++    cb(user, Bdescr((StgPtr) seg));
++    seg = seg->link;
++  }
++}
++
+ // Traverse all the different places that the rts stores blocks
+ // and call a callback on each of them.
+ void listAllBlocks (ListBlocksCb cb, void *user)
+ {
+-  uint32_t g, i;
++  uint32_t g, i, s;
+   for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
+       for (i = 0; i < getNumCapabilities(); i++) {
+           cb(user, getCapability(i)->mut_lists[g]);
+@@ -389,6 +398,24 @@ void listAllBlocks (ListBlocksCb cb, void *user)
+       }
+       cb(user, getCapability(i)->pinned_object_blocks);
+       cb(user, getCapability(i)->pinned_object_empty);
++
++      // list capabilities' current segments
++      if(RtsFlags.GcFlags.useNonmoving) {
++        for (s = 0; s < NONMOVING_ALLOCA_CNT; s++) {
++          listSegmentBlocks(cb, user, getCapability(i)->current_segments[s]);
++        }
++      }
++  }
++
++  // list blocks on the nonmoving heap
++  if(RtsFlags.GcFlags.useNonmoving) {
++    for(s = 0; s < NONMOVING_ALLOCA_CNT; s++) {
++      listSegmentBlocks(cb, user, nonmovingHeap.allocators[s].filled);
++      listSegmentBlocks(cb, user, nonmovingHeap.allocators[s].saved_filled);
++      listSegmentBlocks(cb, user, nonmovingHeap.allocators[s].active);
++    }
++    cb(user, nonmoving_large_objects);
++    cb(user, nonmoving_compact_objects);
+   }
+ }
+ 
+-- 
+2.42.0
+

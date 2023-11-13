@@ -199,6 +199,7 @@ in {
                 ++ fromUntil "9.4.5"  "9.4.8"  ./patches/ghc/ghc-9.4.5-include-order-fix.patch
                 ++ fromUntil "9.6.2"  "9.8"    ./patches/ghc/ghc-9.4.5-include-order-fix.patch
                 ++ fromUntil "9.6.1"  "9.10"   ./patches/ghc/MR10116.patch
+                ++ fromUntil "9.4.6"  "9.5"   ./patches/ghc/T22627.patch
                 ++ final.lib.optionals (final.stdenv.buildPlatform == final.stdenv.targetPlatform) (fromUntil "9.4.1" "9.6" ./patches/ghc/hadrian-build-deriveConstants-genprimopcode-ghc94.patch)
                 ++ final.lib.optionals (final.stdenv.buildPlatform == final.stdenv.targetPlatform) (fromUntil "9.6.1" "9.10" ./patches/ghc/hadrian-build-deriveConstants-genprimopcode.patch)
                 ++ final.lib.optionals (final.stdenv.targetPlatform.isGhcjs) (fromUntil "9.6.1"  "9.8"    ./patches/ghc/ghc-9.6-Merge-libiserv-with-ghci.patch)
