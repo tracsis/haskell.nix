@@ -54,7 +54,7 @@ let
         else val
       );
 
-  util = import ./util.nix { cabal-install = pkgs.buildPackages.haskell-nix.cabal-install.${compiler-nix-name}; };
+  util = import ./util.nix { cabal-install = pkgs.buildPackages.haskell-nix.nix-tools-unchecked.exes.cabal; };
 
   # Map the values in an association list over the withIfdInputs function.
   #
@@ -211,6 +211,7 @@ let
     githash = haskell-nix.callPackage ./githash { inherit compiler-nix-name evalPackages; testSrc = testSrcWithGitDir; };
     c-ffi = callTest ./c-ffi { inherit util; };
     th-dlls = callTest ./th-dlls { inherit util; };
+    th-dlls-minimal = callTest ./th-dlls-minimal { inherit util; };
     external-static-plugin = callTest ./external-static-plugin {};
     exe-dlls = callTest ./exe-dlls { inherit util; };
     exe-lib-dlls = callTest ./exe-lib-dlls { inherit util; };
@@ -220,6 +221,8 @@ let
     annotations = callTest ./annotations { inherit util; };
     cabal-project-nix-path = callTest ./cabal-project-nix-path {};
     plugin = callTest ./plugin {};
+    supported-languages = callTest ./supported-langauges {};
+    js-template-haskell = callTest ./js-template-haskell {};
     unit = unitTests;
   };
 

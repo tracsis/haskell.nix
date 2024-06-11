@@ -67,8 +67,15 @@ let self =
 , useLdGold ?
     # might be better check to see if cc is clang/llvm?
     # use gold as the linker on linux to improve link times
-    # do not use it on musl due to a ld.gold bug. See: <https://sourceware.org/bugzilla/show_bug.cgi?id=22266>.
-    (stdenv.targetPlatform.isLinux && !stdenv.targetPlatform.isAndroid && !stdenv.targetPlatform.isMusl)
+    # do not use ld.gold 2.3 with musl due to a ld.gold bug.
+    # See: <https://sourceware.org/bugzilla/show_bug.cgi?id=22266>.
+    # Note that this bug was resolved in 2017.
+    ( stdenv.targetPlatform.isLinux
+      # don't use gold on android.
+      && !stdenv.targetPlatform.isAndroid
+      # don't use gold with with musl. Still seems to be
+      # affected by 22266.
+      && !stdenv.targetPlatform.isMusl)
 
 , ghc-version ? src-spec.version
 , ghc-version-date ? null
@@ -141,10 +148,9 @@ let
     CrossCompilePrefix = ${targetPrefix}
   '' + lib.optionalString isCrossTarget ''
     Stage1Only = ${if targetPlatform.system == hostPlatform.system then "NO" else "YES"}
-  ''
-    # GHC 9.0.1 fails to compile for musl unless HADDOC_DOCS = NO
-    + lib.optionalString (isCrossTarget || (targetPlatform.isMusl && builtins.compareVersions ghc-version "9.0.1" >= 0)) ''
+  '' + lib.optionalString (isCrossTarget || targetPlatform.isMusl) ''
     HADDOCK_DOCS = NO
+  '' + ''
     BUILD_SPHINX_HTML = NO
     BUILD_SPHINX_PDF = NO
   '' + lib.optionalString enableRelocatedStaticLibs ''
@@ -247,23 +253,28 @@ let
           then "ghc928"
           else "ghc962";
     in
-      assert (buildPackages.haskell.compiler ? ${compiler-nix-name}
-        || throw "Expected pkgs.haskell.compiler.${compiler-nix-name} for building hadrian");
-    buildPackages.pinned-haskell-nix.tool compiler-nix-name "hadrian" {
+    buildPackages.haskell-nix.tool compiler-nix-name "hadrian" {
       compilerSelection = p: p.haskell.compiler;
       index-state = buildPackages.haskell-nix.internalHackageIndexState;
       # Verions of hadrian that comes with 9.6 depends on `time`
       materialized =
         if builtins.compareVersions ghc-version "9.4" < 0
           then ../../materialized/${compiler-nix-name}/hadrian-ghc92
+        else if builtins.compareVersions ghc-version "9.4.8" < 0
+          then ../../materialized/${compiler-nix-name}/hadrian-ghc947
         else if builtins.compareVersions ghc-version "9.6" < 0
           then ../../materialized/${compiler-nix-name}/hadrian-ghc94
+        else if builtins.compareVersions ghc-version "9.6.5" < 0
+          then ../../materialized/${compiler-nix-name}/hadrian-ghc964
         else if builtins.compareVersions ghc-version "9.8" < 0
           then ../../materialized/${compiler-nix-name}/hadrian-ghc96
+        else if builtins.compareVersions ghc-version "9.8.2" < 0
+          then ../../materialized/${compiler-nix-name}/hadrian-ghc981
         else if builtins.compareVersions ghc-version "9.9" < 0
           then ../../materialized/${compiler-nix-name}/hadrian-ghc98
         else ../../materialized/${compiler-nix-name}/hadrian-ghc99;
       modules = [{
+        reinstallableLibGhc = false;
         # Apply the patches in a way that does not require using something
         # like `srcOnly`. The problem with `pkgs.srcOnly` was that it had to run
         # on a platform at eval time.
@@ -317,6 +328,11 @@ let
       # `-fexternal-dynamic-refs` causes `undefined reference` errors when building GHC cross compiler for windows
       + lib.optionalString (enableRelocatedStaticLibs && targetPlatform.isx86_64 && !targetPlatform.isWindows)
         " '*.*.ghc.*.opts += -fexternal-dynamic-refs'"
+      # The fact that we need to set this here is pretty idiotic. GHC should figure this out on it's own.
+      # Either have a runtime flag/setting to disable it or if dlopen fails, remember that it failed and
+      # fall back to non-dynamic. We only have dynamic linker with musl if host and target arch match.
+      + lib.optionalString (targetPlatform.isAndroid || (targetPlatform.isMusl && haskell-nix.haskellLib.isCrossTarget))
+        " '*.ghc.cabal.configure.opts += --flags=-dynamic-system-linker'"
       # The following is required if we build on aarch64-darwin for aarch64-iOS. Otherwise older
       # iPhones/iPads/... won't understand the compiled code, as the compiler will emit LDSETALH
       # + lib.optionalString (targetPlatform.???) "'*.rts.ghc.c.opts += -optc-mcpu=apple-a7 -optc-march=armv8-a+norcpc'"
@@ -548,6 +564,10 @@ stdenv.mkDerivation (rec {
               mkdir -p $generated/compiler/stage2/build/GHC/Settings
               cp _build/stage1/compiler/build/GHC/Settings/Config.hs $generated/compiler/stage2/build/GHC/Settings
             fi
+            if [[ -f compiler/GHC/CmmToLlvm/Version/Bounds.hs ]]; then
+              mkdir -p $generated/compiler/GHC/CmmToLlvm/Version
+              cp compiler/GHC/CmmToLlvm/Version/Bounds.hs $generated/compiler/GHC/CmmToLlvm/Version/Bounds.hs
+            fi
             cp _build/stage1/compiler/build/*.hs-incl $generated/compiler/stage2/build || true
           ''
           # Save generated files for needed when building ghc-boot
@@ -632,6 +652,17 @@ stdenv.mkDerivation (rec {
     # We could add `configured-src` as an output of the ghc derivation, but
     # having it as its own derivation means it can be accessed quickly without
     # building GHC.
+    raw-src = stdenv.mkDerivation {
+      name = name + "-raw-src";
+      inherit
+        version
+        patches
+        src;
+      installPhase = ''
+        cp -r . $out
+      '';
+      phases = [ "unpackPhase" "patchPhase" "installPhase"];
+    };
     configured-src = stdenv.mkDerivation ({
       name = name + "-configured-src";
       inherit
@@ -773,10 +804,8 @@ stdenv.mkDerivation (rec {
     ${hadrian}/bin/hadrian ${hadrianArgs} stage1:lib:terminfo
   '' + lib.optionalString (installStage1 && !haskell-nix.haskellLib.isCrossTarget) ''
     ${hadrian}/bin/hadrian ${hadrianArgs} stage2:exe:iserv
-    # I don't seem to be able to build _build/stage1/lib/bin/ghc-iserv-prof
-    # by asking hadrian for this. The issue is likely that the profiling way
-    # is probably missing from hadrian m(
-    ${hadrian}/bin/hadrian ${hadrianArgs} _build/stage1/lib/bin/ghc-iserv-prof
+    ${hadrian}/bin/hadrian ${hadrianArgs} _build/stage1/${
+        lib.optionalString (builtins.compareVersions ghc-version "9.9" < 0) "lib/"}bin/ghc-iserv-prof
     pushd _build/stage1/bin
     for exe in *; do
       mv $exe ${targetPrefix}$exe
@@ -793,19 +822,17 @@ stdenv.mkDerivation (rec {
       then ''
         mkdir $out
         cp -r _build/stage1/bin $out
-        ${
-          # These are needed when building the reinstallable lib ghc
-          if targetPlatform.isMusl
-            then ''
-              cp _build/stageBoot/bin/genprimopcode $out/bin
-              cp _build/stageBoot/bin/deriveConstants $out/bin
-            '' else ''
-              cp _build/stageBoot/bin/${targetPrefix}genprimopcode $out/bin
-              ln -s $out/bin/${targetPrefix}genprimopcode $out/bin/genprimopcode
-              cp _build/stageBoot/bin/${targetPrefix}deriveConstants $out/bin
-              ln -s $out/bin/${targetPrefix}deriveConstants $out/bin/deriveConstants
-            ''
-        }
+        # let's assume that if we find a non-prefixed genprimop,
+        # we also find a non-prefixed deriveConstants
+        if [ -f _build/stageBoot/bin/genprimopcode ]; then
+          cp _build/stageBoot/bin/genprimopcode $out/bin
+          cp _build/stageBoot/bin/deriveConstants $out/bin
+        else
+          cp _build/stageBoot/bin/${targetPrefix}genprimopcode $out/bin
+          ln -s $out/bin/${targetPrefix}genprimopcode $out/bin/genprimopcode
+          cp _build/stageBoot/bin/${targetPrefix}deriveConstants $out/bin
+          ln -s $out/bin/${targetPrefix}deriveConstants $out/bin/deriveConstants
+        fi
         cp -r _build/stage1/lib $out
         mkdir $doc
         cp -r _build/stage1/share $doc
